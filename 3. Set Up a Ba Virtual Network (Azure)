@@ -1,0 +1,155 @@
+3. Set Up a Basic VPC (AWS) or Virtual Network (Azure)
+	• Goal: Learn networking basics by creating a VPC or virtual network.
+	• Tasks:
+		○ Create a custom VPC with a single public and private subnet.
+		○ Add an internet gateway for public traffic.
+		○ Configure routing tables for each subnet.
+	• Focus Areas: Networking basics and route configuration
+
+
+Correct Workflow in Terraform for Azure
+Here’s the flow:
+	1. Create a VNet.
+	2. Create one public subnet and one private subnet within that VNet.
+	3. Add a route table:
+		○ Attach it to the public subnet.
+		○ Define a route for 0.0.0.0/0 to allow traffic through the internet.
+	4. Assign a public IP to resources in the public subnet to make them accessible.
+
+
+
+# PROVIDER 
+terraform {
+  required_providers {
+    azurerm = {
+      source = "hashicorp/azurerm"
+      version = "4.16.0"
+    }
+  }
+}
+provider "azurerm" {
+    subscription_id = "----"
+  features {
+  }
+}
+# ==============================================
+# MAIN BODY
+resource "azurerm_resource_group" "rg1-test1" {
+  name     = var.rg_name
+  location = var.location
+}
+# resource "azurerm_network_security_group" "example" {
+#  name                = "example-security-group"
+#  location            = azurerm_resource_group.example.location
+#  resource_group_name = azurerm_resource_group.example.name
+#}
+resource "azurerm_virtual_network" "vnet1-test1" {
+  name                = "vnet1-test"
+  location            = azurerm_resource_group.rg1-test1.location
+  resource_group_name = azurerm_resource_group.rg1-test1.name
+  address_space       = ["10.0.0.0/16"]
+  dns_servers         = ["10.0.0.4", "10.0.0.5"]
+  subnet {
+    name             = "subnet1-test"
+    address_prefixes = ["10.0.1.0/24"]
+  }
+}
+resource "azurerm_subnet" "subnet2-test-public1" {
+  name                 = "subnet2-test-public"
+  resource_group_name  = azurerm_resource_group.rg1-test1.name
+  virtual_network_name = azurerm_virtual_network.vnet1-test1.name
+  address_prefixes     = ["10.0.2.0/24"]
+}
+
+resource "azurerm_route_table" "routetable1-test-1" {
+  name                = "routetable1-test"
+  location            = azurerm_resource_group.rg1-test1.location
+  resource_group_name = azurerm_resource_group.rg1-test1.name
+  route {
+    name           = "route1-test"
+    address_prefix = "0.0.0.0/0"
+    next_hop_type  = "Internet"
+  }
+}
+resource "azurerm_subnet_route_table_association" "routetable1-test-1-association" {
+  subnet_id      = azurerm_subnet.subnet2-test-public1.id
+  route_table_id = azurerm_route_table.routetable1-test-1.id
+}
+resource "azurerm_public_ip" "pip1test-1" {
+  name                = "pip1test"
+  resource_group_name = azurerm_resource_group.rg1-test1.name
+  location            = azurerm_resource_group.rg1-test1.location
+  allocation_method   = "Static"
+}
+
+
+
+
+# =========================================================
+# Virtual Machine that will be associated with the public IP
+resource "azurerm_network_interface" "nic1test-1" {
+  name                = "nic1test"
+  location            = azurerm_resource_group.rg1-test1.location
+  resource_group_name = azurerm_resource_group.rg1-test1.name
+  ip_configuration {
+    name                          = "internal"
+    subnet_id                     = azurerm_subnet.subnet2-test-public1.id
+    private_ip_address_allocation = "Dynamic"
+    public_ip_address_id = azurerm_public_ip.pip1test-1.id
+  }
+}
+resource "azurerm_linux_virtual_machine" "example" {
+  name                = "example-machine"
+  resource_group_name = azurerm_resource_group.rg1-test1.name
+  location            = azurerm_resource_group.rg1-test1.location
+  size                = "Standard_B1s"
+  admin_username      = "adminuser"
+  admin_password      = var.vm_password
+  disable_password_authentication = false
+  network_interface_ids = [
+    azurerm_network_interface.nic1test-1.id,
+  ]
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "0001-com-ubuntu-server-jammy"
+    sku       = "22_04-lts"
+    version   = "latest"
+  }
+}
+
+# NSG
+resource "azurerm_network_security_group" "nsg1-test-1" {
+  name                = "nsg1-test"
+  location            = azurerm_resource_group.rg1-test1.location
+  resource_group_name = azurerm_resource_group.rg1-test1.name
+  security_rule {
+    name                       = "test123"
+    priority                   = 100
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "22"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+  security_rule {
+  name                        = "allow-internet"
+  priority                    = 200
+  direction                   = "Outbound"
+  access                      = "Allow"
+  protocol                    = "*"
+  source_port_range           = "*"
+  destination_port_range      = "*"
+  source_address_prefix       = "*"
+  destination_address_prefix  = "0.0.0.0/0"
+}
+}
+resource "azurerm_subnet_network_security_group_association" "nsg1-test-1-association-1" {
+  subnet_id                 = azurerm_subnet.subnet2-test-public1.id
+  network_security_group_id = azurerm_network_security_group.nsg1-test-1.id
+}
