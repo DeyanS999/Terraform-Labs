@@ -1,0 +1,275 @@
+4. Provision an Auto-Scaling Group
+	• Goal: Set up an auto-scaling group that adjusts the number of instances based on CPU utilization.
+	• Tasks:
+		○ Create a launch configuration or template.
+		○ Define scaling policies (e.g., minimum 1 instance, maximum 3 instances).
+	• Focus Areas: Scaling and dynamic resource management.
+
+
+Resources to Deploy in Azure
+Since Azure doesn’t have "Auto-Scaling Groups" exactly like AWS, you’ll be working with Virtual Machine Scale Sets (VMSS), which provide similar functionality.
+	1. Virtual Network & Subnet
+		○ Create a Virtual Network (VNet) with a subnet where your VMs will be deployed.
+	2. Network Security Group (NSG) & Rules
+		○ Define an NSG to control access to the VM instances.
+	3. Load Balancer (Optional, but recommended for HA)
+		○ Set up an Azure Load Balancer to distribute traffic across instances.
+	4. Virtual Machine Scale Set (VMSS)
+		○ Create a VM Scale Set to manage the auto-scaling instances.
+		○ Define the image (e.g., Ubuntu, Windows, or a custom image).
+		○ Configure instance size, authentication, and networking.
+	5. Autoscaling Policies
+		○ Configure autoscaling rules based on CPU utilization:
+			§ Scale out when CPU > 75% (increase instances).
+			§ Scale in when CPU < 25% (reduce instances).
+			§ Set minimum 1 instance and maximum 3 instances.
+	6. Application Setup (Optional)
+		○ If you want, configure cloud-init or a startup script to install software on the VMs.
+Hints & Key Focus Areas
+	• State Management: Ensure Terraform state is properly managed, preferably using Azure Storage Backend.
+	• Variables & Modules: Consider making it modular for reusability.
+	• Outputs & Logging: Capture useful outputs like the public IP of the Load Balancer.
+	• Testing: Validate the scaling behavior by simulating high CPU usage (e.g., stress test).
+Let me know if you need any clarifications! 🚀
+
+
+
+
+
+# PROVIDER 
+terraform {
+  required_providers {
+    azurerm = {
+      source = "hashicorp/azurerm"
+      version = "4.16.0"
+    }
+  }
+}
+provider "azurerm" {
+    subscription_id = ""
+  features {
+  }
+}
+# ======================================
+# VARIABLES
+variable "location" {
+  default = "eastus"
+}
+variable "rg_name" {
+  default = "rg1-test"
+}
+variable "vm_password" {
+  default = "Vanguard1234"
+}
+
+# ==============================================
+# MAIN BODY
+resource "azurerm_resource_group" "rg1" {
+  name     = var.rg_name
+  location = var.location
+}
+
+
+
+# -----------------------------------------------
+# VMSS
+
+resource "azurerm_virtual_network" "vnet1" {
+  name                = "vnet1"
+  resource_group_name = azurerm_resource_group.rg1.name
+  location            = azurerm_resource_group.rg1.location
+  address_space       = ["10.0.0.0/16"]
+}
+resource "azurerm_subnet" "subnet1" {
+  name                 = "subnet1"
+  resource_group_name  = azurerm_resource_group.rg1.name
+  virtual_network_name = azurerm_virtual_network.vnet1.name
+  address_prefixes     = ["10.0.2.0/24"]
+}
+resource "azurerm_linux_virtual_machine_scale_set" "vmss1" {
+  name                = "vmss1"
+  resource_group_name = azurerm_resource_group.rg1.name
+  location            = azurerm_resource_group.rg1.location
+  sku                 = "Standard_B1s"
+  instances           = 1
+  admin_username      = "adminuser"
+  admin_password = var.vm_password
+  disable_password_authentication = false
+
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "0001-com-ubuntu-server-jammy"
+    sku       = "22_04-lts"
+    version   = "latest"
+  }
+    lifecycle {
+    ignore_changes = [instances]   # Helps prevent Terraform from modifying instance counts manually.
+  }
+  os_disk {
+    storage_account_type = "Standard_LRS"
+    caching              = "ReadWrite"
+  }
+  network_interface {
+    name    = "nic1"
+    primary = true
+    ip_configuration {
+      name      = "internal"
+      primary   = true
+      subnet_id = azurerm_subnet.subnet1.id
+    }
+    
+  }
+}
+# --------------------------------------
+# Autoscale settings
+resource "azurerm_monitor_autoscale_setting" "autoscale-rule1" {
+  name                = "autoscale-rule1"
+  resource_group_name = azurerm_resource_group.rg1.name
+  location            = azurerm_resource_group.rg1.location
+  target_resource_id  = azurerm_linux_virtual_machine_scale_set.vmss1.id
+  profile {
+    name = "defaultProfile"
+    capacity {
+      default = 1
+      minimum = 1
+      maximum = 3
+    }
+    rule {
+      metric_trigger {
+        metric_name        = "Percentage CPU"
+        metric_resource_id = azurerm_linux_virtual_machine_scale_set.vmss1.id
+        time_grain         = "PT5M"
+        statistic          = "Average"
+        time_window        = "PT5M"
+        time_aggregation   = "Average"
+        operator           = "GreaterThan"
+        threshold          = 75
+        metric_namespace   = "microsoft.compute/virtualmachinescalesets"
+      }
+      scale_action {
+        direction = "Increase"
+        type      = "ChangeCount"
+        value     = "1"
+        cooldown  = "PT5M"
+      }
+    }
+    rule {
+      metric_trigger {
+        metric_name        = "Percentage CPU"
+        metric_resource_id = azurerm_linux_virtual_machine_scale_set.vmss1.id
+        time_grain         = "PT5M"
+        statistic          = "Average"
+        time_window        = "PT5M"
+        time_aggregation   = "Average"
+        operator           = "LessThan"
+        threshold          = 25
+      }
+      scale_action {
+        direction = "Decrease"
+        type      = "ChangeCount"
+        value     = "1"
+        cooldown  = "PT5M"
+      }
+    }
+  }
+  predictive {
+    scale_mode      = "Enabled"
+    look_ahead_time = "PT5M"
+  }
+}
+# -------------------------------------------------
+# NSG
+resource "azurerm_network_security_group" "nsg1" {
+  name                = "acceptanceTestSecurityGroup1"
+  location            = azurerm_resource_group.rg1.location
+  resource_group_name = azurerm_resource_group.rg1.name
+  security_rule {
+    name                       = "allow-ssh"
+    priority                   = 100
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "22"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+  
+    security_rule {
+    name                       = "allow-https"
+    priority                   = 110
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "443"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+      security_rule {
+    name                       = "allow-http"
+    priority                   = 120
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "80"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+}
+resource "azurerm_subnet_network_security_group_association" "nsg-association-1" {
+  subnet_id                 = azurerm_subnet.subnet1.id
+  network_security_group_id = azurerm_network_security_group.nsg1.id
+}
+
+# -------------------------------
+# Load Balancer
+resource "azurerm_public_ip" "pubip-lb" {
+  name                = "pubip-lb"
+  location            = azurerm_resource_group.rg1.location
+  resource_group_name = azurerm_resource_group.rg1.name
+  allocation_method   = "Static"
+}
+resource "azurerm_lb" "lbtest" {
+  name                = "TestLoadBalancer"
+  location            = azurerm_resource_group.rg1.location
+  resource_group_name = azurerm_resource_group.rg1.name
+  frontend_ip_configuration {
+    name                 = "PublicIPAddress"
+    public_ip_address_id = azurerm_public_ip.pubip-lb.id
+  }
+}
+# ------
+# LB Probe
+resource "azurerm_lb_probe" "probe1" {
+  loadbalancer_id = azurerm_lb.lbtest.id
+  name            = "ssh-running-probe"
+  port            = 22
+  protocol = "Tcp"
+}
+
+resource "azurerm_lb_rule" "lbrule1" {
+  loadbalancer_id                = azurerm_lb.lbtest.id
+  name                           = "LBRule-SSH"
+  protocol                       = "Tcp"
+  frontend_port                  = 22
+  backend_port                   = 22
+  frontend_ip_configuration_name = "PublicIPAddress"
+}
+resource "azurerm_lb_rule" "lbrule2" {
+  loadbalancer_id                = azurerm_lb.lbtest.id
+  name                           = "LBRule-HTTPS"
+  protocol                       = "Tcp"
+  frontend_port                  = 443
+  backend_port                   = 443
+  frontend_ip_configuration_name = "PublicIPAddress"
+}
+resource "azurerm_lb_rule" "lbrule3" {
+  loadbalancer_id                = azurerm_lb.lbtest.id
+  name                           = "LBRule-HTTP"
+  protocol                       = "Tcp"
+  frontend_port                  = 80
+  backend_port                   = 80
+  frontend_ip_configuration_name = "PublicIPAddress"
+}
