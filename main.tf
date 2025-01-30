@@ -29,7 +29,7 @@ variable "vm_password" {
 }
 
 
-# ==============================================
+# ===============================================
 # MAIN BODY
 
 resource "azurerm_resource_group" "rg1" {
