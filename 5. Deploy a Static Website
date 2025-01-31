@@ -1,0 +1,184 @@
+5. Deploy a Static Website
+	• Goal: Host a static website in an S3 bucket or Azure Blob Storage.
+	• Tasks:
+		○ Enable static website hosting.
+		○ Add an index.html file.
+		○ Configure a custom error page.
+	• Focus Areas: Hosting configurations and basic resource deployment.
+	
+	
+	
+	
+	
+	Steps to Deploy a Static Website on Azure Blob Storage with Terraform
+	1. Set Up Your Terraform Configuration
+		• Make sure you have Terraform installed and are authenticated to Azure using the Azure CLI (az login).
+		• Define your Azure provider in Terraform.
+	2. Create an Azure Resource Group
+		• A resource group is needed to contain all your deployed resources.
+	3. Deploy an Azure Storage Account
+		• Choose a Storage Account with a type that supports static website hosting (like StorageV2).
+		• Enable static website hosting on the storage account.
+		• Configure the index document (e.g., index.html) and an optional error page (e.g., 404.html).
+	4. Upload the Website Files (index.html & error.html)
+		• Use Azure Blob Storage to store your static site files.
+		• The files should be placed in the $web container, which is automatically created when static website hosting is enabled.
+	5. Configure Access and Permissions
+		• Set public access so that users can view the website.
+		• Ensure the storage account has a public endpoint for access.
+	6. Output the Website URL
+		• Once deployed, output the static website URL so you can test the deployment.
+	
+	Key Azure Resources to Deploy
+		• azurerm_resource_group → To group resources together.
+		• azurerm_storage_account → For hosting the static site.
+		• azurerm_storage_blob → To store website files.
+		• azurerm_storage_container (optional) → If manually managing file uploads.
+	
+	
+	
+	-- index.html --
+	<!DOCTYPE html>
+	<html lang="en">
+	<head>
+	    <meta charset="UTF-8">
+	    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+	    <title>My Static Website</title>
+	</head>
+	<body>
+	    <h1>Welcome to My Static Website</h1>
+	    <img src="https://storagetest5577.blob.core.windows.net/$web/image.JPG" alt="My Uploaded Image" width="500" alt="My Uploaded Image" width="500">
+	    <p>This is a simple static website hosted on Azure.</p>
+	</body>
+	</html>
+	
+	
+	--------------
+	
+	
+	-- error.html --
+	<!DOCTYPE html>
+	<html lang="en">
+	<head>
+	    <meta charset="UTF-8">
+	    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+	    <title>404 - Page Not Found</title>
+	</head>
+	<body>
+	    <h1>404 - Page Not Found</h1>
+	    <p>Sorry, the page you are looking for does not exist.</p>
+	</body>
+	</html>
+	
+	
+	------------------
+	
+	
+	
+	
+	
+	# PROVIDER 
+	terraform {
+	  required_providers {
+	    azurerm = {
+	      source = "hashicorp/azurerm"
+	      version = "4.16.0"
+	    }
+	  }
+	}
+	provider "azurerm" {
+	    subscription_id = ""
+	  features {
+	  }
+	}
+	# ======================================
+	# VARIABLES
+	variable "rg" {
+	  default = "rg1"
+	}
+	variable "location" {
+	  default = "eastus"
+	}
+	variable "admin_password" {
+	  default = "Vanguard1234"
+	}
+	variable "vnet1" {
+	  default = "vnet1-test"
+	}
+	# -----------------------------------------
+	# Storage account
+	resource "azurerm_resource_group" "rg1" {
+	  name     = var.rg
+	  location = var.location
+	}
+	resource "azurerm_virtual_network" "vnet1" {
+	  name                = "vnet1"
+	  address_space       = ["10.0.0.0/16"]
+	  location            = azurerm_resource_group.rg1.location
+	  resource_group_name = azurerm_resource_group.rg1.name
+	}
+	resource "azurerm_subnet" "subnet1" {
+	  name                 = "subnet1"
+	  resource_group_name  = azurerm_resource_group.rg1.name
+	  virtual_network_name = azurerm_virtual_network.vnet1.name
+	  address_prefixes     = ["10.0.2.0/24"]
+	  service_endpoints    = ["Microsoft.Sql", "Microsoft.Storage"]
+	}
+	resource "azurerm_storage_account" "storagetest5577" {
+	  name                = "storagetest5577"
+	  resource_group_name = azurerm_resource_group.rg1.name
+	  location                 = azurerm_resource_group.rg1.location
+	  account_tier             = "Standard"
+	  account_replication_type = "LRS"
+	  account_kind = "StorageV2"
+	 
+	  network_rules {
+	    default_action             = "Deny"
+	    ip_rules                   = ["176.12.39.167"]
+	    virtual_network_subnet_ids = [azurerm_subnet.subnet1.id]
+	  }
+	}
+	resource "azurerm_storage_account_static_website" "storagetest5577" {
+	  storage_account_id = azurerm_storage_account.storagetest5577.id
+	  error_404_document = "error.html"
+	  index_document     = "index.html"
+	}
+	resource "azurerm_storage_container" "web-custom_container" {
+	  name                  = "web-custom"
+	  storage_account_id    = azurerm_storage_account.storagetest5577.id
+	  container_access_type = "container"  # Set to 'container' to allow public access
+	  depends_on = [
+	    azurerm_storage_account.storagetest5577
+	  ]
+	}
+	resource "azurerm_storage_container" "web" {
+	  name                  = "$web"
+	  storage_account_id    = azurerm_storage_account.storagetest5577.id
+	  container_access_type = "container"  # Set to 'container' to allow public access
+	  depends_on = [
+	    azurerm_storage_account.storagetest5577
+	  ]
+	}
+	
+	# ------------------------------------------
+	# NSG
+	resource "azurerm_network_security_group" "nsg1" {
+	  name                = "nsg1"
+	  location            = azurerm_resource_group.rg1.location
+	  resource_group_name = azurerm_resource_group.rg1.name
+	  security_rule {
+	    name                       = "test123"
+	    priority                   = 100
+	    direction                  = "Inbound"
+	    access                     = "Allow"
+	    protocol                   = "*"
+	    source_port_range          = "*"
+	    destination_port_range     = "*"
+	    source_address_prefix      = "176.12.39.167"
+	    destination_address_prefix = "*"
+	  }
+	}
+	resource "azurerm_subnet_network_security_group_association" "nsgassociation1" {
+	  subnet_id                 = azurerm_subnet.subnet1.id
+	  network_security_group_id = azurerm_network_security_group.nsg1.id
+	}
