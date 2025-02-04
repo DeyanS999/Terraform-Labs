@@ -1,0 +1,97 @@
+8. Terraform Remote State
+	• Goal: Store your Terraform state remotely in a backend.
+	• Tasks:
+		○ Set up remote state storage using an S3 bucket or Azure Blob Storage.
+		○ Lock the state to prevent simultaneous updates.
+	• Focus Areas: Backend configuration and collaboration.
+
+
+Got issue to use access key as not enough permissions.
+
+
+  # PROVIDER 
+  terraform {
+    required_providers {
+      azurerm = {
+        source = "hashicorp/azurerm"
+        version = "4.16.0"
+      }
+    }
+  }
+  provider "azurerm" {
+      subscription_id = ""
+    features {
+        key_vault {
+            purge_soft_delete_on_destroy    = true
+            recover_soft_deleted_key_vaults = true
+    }
+    }
+  }
+# ------------ cofnigure terraform backend to use azure storage -----------
+terraform {
+  backend "azurerm" {
+    resource_group_name   = "rg1"
+    storage_account_name  = "storageaccount55771123"
+    container_name        = "container1"
+    key                   = "terraform.tfstate"
+    access_key            = data.azurerm_key_vault_secret.storage_key.value
+  }
+}
+    # ------- storage account ------------
+
+    resource "azurerm_resource_group" "rg1" {
+  name     = var.resource_group
+  location = var.location
+}
+resource "azurerm_storage_account" "storage1" {
+  name                     = var.storage_account
+  resource_group_name      = azurerm_resource_group.rg1.name
+  location                 = azurerm_resource_group.rg1.location
+  account_tier             = "Standard"
+  account_replication_type = "LRS"
+}
+resource "azurerm_storage_container" "Container-test" {
+  storage_account_id = azurerm_storage_account.storage1.id
+  name                  = var.container_1
+  container_access_type = "private"
+}
+resource "azurerm_storage_blob" "Blob1" {
+  name                   = "my-awesome-content"
+  storage_account_name   = azurerm_storage_account.storage1.name
+  storage_container_name = azurerm_storage_container.Container-test.name
+  type                   = "Block"
+  source                 = "${path.module}/test1.jpg"
+}
+
+# -----------------KEY VAULT -----------------
+data "azurerm_client_config" "current" {}
+
+resource "azurerm_key_vault" "keyvault1" {
+  name                        = "keyvault55771123"
+  location                    = azurerm_resource_group.rg1.location
+  resource_group_name         = azurerm_resource_group.rg1.name
+  enabled_for_disk_encryption = true
+  tenant_id                   = data.azurerm_client_config.current.tenant_id
+  soft_delete_retention_days  = 7
+  purge_protection_enabled    = false
+  sku_name = "standard"
+  access_policy {
+    tenant_id = data.azurerm_client_config.current.tenant_id
+    object_id = data.azurerm_client_config.current.object_id
+    key_permissions = [
+      "Get",
+    ]
+    secret_permissions = [
+      "Get",
+    ]
+    storage_permissions = [
+      "Get",
+    ]
+  }
+}
+
+data "azurerm_key_vault_secret" "storage_key" {
+  name         = "TerraformStorageKey"
+  key_vault_id = azurerm_key_vault.keyvault1.id
+}
+
