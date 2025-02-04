@@ -1,0 +1,96 @@
+9. Deploy a Key-Value Store (e.g., Redis)
+	• Goal: Set up a simple key-value store for caching or storage.
+	• Tasks:
+		○ Deploy a Redis instance using Terraform.
+		○ Set up a security group or firewall rules to allow specific IPs.
+	• Focus Areas: Managing services and access control.
+	
+	
+	
+	
+	variable "resource_group" {
+	  default = "rg1-test"
+	}
+	variable "resource_location" {
+	  default = "eastus"
+	}
+	variable "firewall_rule_1" {
+	  default = "redisrule1"
+	}
+	variable "allowed_ip" {
+	  description = "Your public IP address to access Redis"
+	  default = "176.12.39.167"
+	}
+	variable "subscription_id" {
+	    description = "Provide  the Azure Subscription ID for the subscription you want to apply this code for"
+	    type = string
+	}
+	
+	
+	output "redis_name" {
+	  description = "The name of the Redis Cache that was deployed"
+	  value = azurerm_redis_cache.REDIS1.name
+	  sensitive = true
+	}
+	output "redis_hostname" {
+	  description = "The hostname for Redis Cache"
+	  value = azurerm_redis_cache.REDIS1.hostname
+	}
+	output "redis_primary_access_key" {
+	  description = "Primary key for accessing Redis"
+	  value = azurerm_redis_cache.REDIS1.primary_access_key
+	  sensitive = true
+	}
+	
+	
+	
+	    # PROVIDER 
+	    terraform {
+	      required_providers {
+	        azurerm = {
+	          source = "hashicorp/azurerm"
+	          version = "4.16.0"
+	        }
+	      }
+	    }
+	    provider "azurerm" {
+	        subscription_id = var.subscription_id
+	      features {
+	      }
+	    }
+	
+	    # --------------------- REDIS CACHE -----------------
+	  resource "azurerm_resource_group" "resource_group_1" {
+	  name     = var.resource_group
+	  location = var.resource_location
+	}
+	
+	resource "random_id" "server" {
+	    keepers = {
+	        azi_id = 1
+	    }
+	    byte_length = 8
+	}
+	# NOTE: the Name used for Redis needs to be globally unique
+	resource "azurerm_redis_cache" "REDIS1" {
+	  name                 = "redis-${random_id.server.hex}" # use random id
+	  location             = azurerm_resource_group.resource_group_1.location
+	  resource_group_name  = azurerm_resource_group.resource_group_1.name
+	  capacity             = 1
+	  family               = "C"
+	  sku_name             = "Basic"
+	  non_ssl_port_enabled = false
+	  minimum_tls_version  = "1.2"
+	  access_keys_authentication_enabled = true
+	  redis_configuration {
+	  }
+	  
+	}
+	resource "azurerm_redis_firewall_rule" "allow_my_ip" {
+	  name                = var.firewall_rule_1
+	  redis_cache_name    = azurerm_redis_cache.REDIS1.name
+	  resource_group_name = azurerm_resource_group.resource_group_1.name
+	  start_ip            = var.allowed_ip
+	  end_ip              = var.allowed_ip
+	}
+	
