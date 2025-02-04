@@ -1,0 +1,85 @@
+7. Use Variables and Outputs
+	• Goal: Practice using variables and outputs to make your code more reusable.
+	• Tasks:
+		○ Create a simple resource (e.g., VM or S3 bucket) using input variables for configuration (e.g., region, name).
+		○ Output details like the resource ID or endpoint.
+	• Focus Areas: Variables, outputs, and code reusability.
+
+full code in zip file
+
+
+
+variable "resource_group_name" {
+  default = "rg1"
+}
+variable "location" {
+  default = "eastus"
+}
+#--------------------------------------
+# Virtual Machine
+variable "vm_name" {
+  default = "vm1-test"
+}
+variable "vm_size" {
+  default = "Standard_B1s"
+}
+variable "admin_username" {
+  default = "admind"
+}
+variable "admin_password" {
+  default = "Vanguard1234"
+}
+
+#--------------------------------------
+# Network configuration
+variable "vnet_name" {
+  default = "vnet1-test"
+}
+variable "vnet_address_space" {
+  default = "10.0.0.0/16"
+}
+variable "subnet_name" {
+  default = "subnet1"
+}
+variable "subnet_address_prefix" {
+  default = "10.0.2.0/24"
+}
+variable "public_ip_name" {
+  default = "PublicIP1"
+}
+variable "nic_name" {
+  default = "example-nic1"
+}
+variable "nsg_name" {
+  default = "nsg1"
+}
+variable "ssh_port" {
+  default = "22"
+}
+variable "script_path" {
+  default = "script.sh"
+}
+
+
+
+
+output "vm_id" {
+  description = "The ID of the Virtual Machine"
+  value = azurerm_linux_virtual_machine.vm1.id
+}
+output "vm_public_ip" {
+  description = "The public IP address of the VM"
+  value = azurerm_public_ip.publicip.ip_address
+}
+output "vnet_address_space" {
+  description = "This is the IP address range of the VNET deployed"
+  value = azurerm_virtual_network.testvm1.address_space
+}
+output "subnet_address_prefix" {
+  description = "The Ip range of the subnet"
+  value = azurerm_subnet.subnet1.address_prefixes
+}
+output "resource_group_name" {
+  description = "Name of the resource group deployed"
+  value = azurerm_resource_group.test1.name
+}
