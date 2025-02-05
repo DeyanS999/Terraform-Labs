@@ -1,0 +1,331 @@
+1. Deploy a Multi-Tier Architecture in Azure
+	• Goal: Set up a 3-tier application (Web, App, Database).
+	• Tasks:
+		○ Deploy an Azure App Service for the Web Tier.
+		○ Deploy a VM Scale Set for the App Tier.
+		○ Deploy an Azure Database for PostgreSQL/MySQL for the Database Tier.
+		○ Use Network Security Groups (NSGs) to restrict access between tiers.
+	
+
+General Idea of Multi-Tier Architecture
+A 3-tier architecture splits an application into three distinct layers, each handling different tasks:
+
+Web Tier (Presentation Layer) → Handles user requests
+
+In Azure, this is an Azure App Service (a fully managed platform for web apps).
+Users access this tier through HTTP/HTTPS requests.
+Application Tier (Business Logic Layer) → Processes requests
+
+This layer contains the core application logic and APIs.
+In Azure, we use VM Scale Sets (a group of VMs that auto-scale based on demand).
+Only the Web Tier should communicate with this layer.
+Database Tier (Data Storage Layer) → Stores and retrieves data
+
+In Azure, we use Azure Database for PostgreSQL/MySQL.
+Only the App Tier should access the database, ensuring security.
+🔹 How it Works
+A user accesses the website → Azure App Service receives the request.
+The web tier forwards requests → Sends API calls to the App Tier (VM Scale Set).
+The App Tier processes the request → Retrieves data from the Database Tier.
+Database Tier fetches/stores data → Sends data back to the App Tier.
+The App Tier returns a response → Web Tier sends the result to the user.
+🔹 Key Azure Services Involved
+Tier	Azure Service	Purpose
+Web Tier	Azure App Service	Hosts the web frontend.
+App Tier	VM Scale Set	Auto-scales backend app servers.
+Database Tier	Azure Database for PostgreSQL/MySQL	Stores data securely.
+Security	Network Security Groups (NSGs)	Restricts access between tiers.
+🔹 Network Security Setup
+Using NSGs to Restrict Access
+
+
+The Web Tier should be public but only allow HTTP/HTTPS.
+The App Tier should be private and only allow traffic from the Web Tier.
+The Database Tier should only accept connections from the App Tier (not the internet).
+Source	Destination	Allowed Ports	Why?
+Internet	Web Tier (App Service)	80, 443 (HTTP/HTTPS)	Users access the website.
+Web Tier	App Tier (VM Scale Set)	Custom ports (e.g., 5000, 8080)	Web Tier calls the backend APIs.
+App Tier	Database Tier (PostgreSQL/MySQL)	5432 (PostgreSQL), 3306 (MySQL)	Backend connects to the database.
+Any	Database Tier	❌ No public access!	Prevents unauthorized access.
+
+🔹 Terraform Implementation Overview
+
+Define an App Service for the Web Tier.
+Deploy a VM Scale Set for the App Tier.
+Provision an Azure Database (PostgreSQL/MySQL).
+Configure NSGs to restrict access.
+
+
+
+
+# Provider
+terraform {
+  required_providers {
+    azurerm = {
+      source = "hashicorp/azurerm"
+      version = "4.16.0"
+    }
+  }
+}
+provider "azurerm" {
+  # Configuration options
+  features {}
+  subscription_id = ""
+}
+# ----------------variables--------------
+variable "resource_group_name" {
+  default = "rg1-test"
+  }
+variable "resource_group_location" {
+  default = "eastus"
+  }
+variable "admin_password" {
+  default = "Vanguard1234"
+  }
+variable "app_service_plan" {
+  default = "appserviceplan1"
+  }
+variable "vnet" {
+  default = "vnet1-test"
+  }
+variable "subnet" {
+  default = "subnet1-test"
+  }
+
+# ----------------outputs----------------
+output "appserviceplanid" {
+  description = "Displays the ID of the created app service plan"
+  value = azurerm_app_service_plan.appserviceplan1.id
+}
+# ---------------app service------------- // web tier //
+resource "azurerm_resource_group" "rg1" {
+  name     = var.resource_group_name
+  location = var.resource_group_location
+}
+resource "azurerm_app_service_plan" "appserviceplan1" {
+  name                = var.app_service_plan
+  location            = azurerm_resource_group.rg1.location
+  resource_group_name = azurerm_resource_group.rg1.name
+  sku {
+    tier = "Basic"
+    size = "B1"
+  }
+}
+    resource "random_id" "server" {
+        keepers = {
+            azi_id = 1
+        }
+        byte_length = 8
+}
+resource "azurerm_app_service" "appservicename1" {
+  name                = "AppService-${random_id.server.hex}"
+  location            = azurerm_resource_group.rg1.location
+  resource_group_name = azurerm_resource_group.rg1.name
+  app_service_plan_id = azurerm_app_service_plan.appserviceplan1.id
+  
+  site_config {
+    dotnet_framework_version = "v4.0"
+    scm_type                 = "None"
+    use_32_bit_worker_process = true
+  }
+}
+# ------------------- VMSS -------------------- // app tier //
+resource "azurerm_virtual_network" "vnet1" {
+  name                = "example-network"
+  resource_group_name = azurerm_resource_group.rg1.name
+  location            = azurerm_resource_group.rg1.location
+  address_space       = ["10.0.0.0/16"]
+}
+
+
+resource "azurerm_linux_virtual_machine_scale_set" "vmss1" {
+  name                = "example-vmss"
+  resource_group_name = azurerm_resource_group.rg1.name
+  location            = azurerm_resource_group.rg1.location
+  sku                 = "Standard_B1s"
+  instances           = 1
+  admin_username      = "admind"
+  admin_password = var.admin_password
+  disable_password_authentication = false
+  
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "0001-com-ubuntu-server-jammy"
+    sku       = "22_04-lts"
+    version   = "latest"
+  }
+  os_disk {
+    storage_account_type = "Standard_LRS"
+    caching              = "ReadWrite"
+  }
+  network_interface {
+    name    = "example"
+    primary = true
+    ip_configuration {
+      name      = "internal"
+      primary   = true
+      subnet_id = azurerm_subnet.subnet1-App-Tier.id
+    }
+  }
+}
+# --------------------Database---------------------- // Database tier //
+resource "azurerm_postgresql_server" "sqlserver1" {
+  name                = "sqlserver-test-${random_id.server.hex}"
+  location            = azurerm_resource_group.rg1.location
+  resource_group_name = azurerm_resource_group.rg1.name
+  sku_name = "GP_Gen5_2"
+  storage_mb                   = 5120
+  backup_retention_days        = 7
+  geo_redundant_backup_enabled = false
+  auto_grow_enabled            = true
+  administrator_login          = "admind"
+  administrator_login_password = "Vanguard1234"
+  version                      = "9.5"
+  ssl_enforcement_enabled      = true
+}
+resource "azurerm_postgresql_database" "sqldb" {
+  name                = "database-postgre-sql-test"
+  resource_group_name = azurerm_resource_group.rg1.name
+  server_name         = azurerm_postgresql_server.sqlserver1.name
+  charset             = "UTF8"
+  collation           = "English_United States.1252"
+  # prevent the possibility of accidental data loss
+  #lifecycle {
+  # prevent_destroy = true
+  #}
+}
+# ---------------subnets-----------------
+resource "azurerm_subnet" "subnet2-web-tier" {
+  name                 = "subnet2-web-tier"
+  resource_group_name  = azurerm_resource_group.rg1.name
+  virtual_network_name = azurerm_virtual_network.vnet1.name
+  address_prefixes     = ["10.0.3.0/24"]
+  delegation {
+    name = "delegation-to-serverfarms"
+    service_delegation {
+      name    = "Microsoft.Web/serverFarms"
+      actions = ["Microsoft.Network/virtualNetworks/subnets/action"]
+    }
+  }  
+}
+resource "azurerm_subnet" "subnet1-App-Tier" {     # APP TIER - LAYER - 2
+  name                 = "subnet1-App-Tier"
+  resource_group_name  = azurerm_resource_group.rg1.name
+  virtual_network_name = azurerm_virtual_network.vnet1.name
+  address_prefixes     = ["10.0.2.0/24"]
+}
+resource "azurerm_subnet" "subnet3-DB-Tier" {
+  name                 = "subnet3-DB-Tier"
+  resource_group_name  = azurerm_resource_group.rg1.name
+  virtual_network_name = azurerm_virtual_network.vnet1.name
+  address_prefixes     = ["10.0.4.0/24"]
+}
+# ----------------------NSG---------------------
+resource "azurerm_network_security_group" "NSG-Web-Tier" {
+  name                = "NSG-Web-Tier"
+  location            = azurerm_resource_group.rg1.location
+  resource_group_name = azurerm_resource_group.rg1.name
+  security_rule {
+    name                       = "allow-http"
+    priority                   = 120
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "80"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+    security_rule {
+    name                       = "allow-https"
+    priority                   = 125
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "443"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+}
+resource "azurerm_subnet_network_security_group_association" "NSG-Web-Tier-association" {
+  subnet_id                 = azurerm_subnet.subnet2-web-tier.id
+  network_security_group_id = azurerm_network_security_group.NSG-Web-Tier.id
+}
+resource "azurerm_network_security_group" "NSG-App-Tier" {
+  name                = "NSG-App-Tier"
+  location            = azurerm_resource_group.rg1.location
+  resource_group_name = azurerm_resource_group.rg1.name
+  security_rule {
+    name                       = "allow-5000"
+    priority                   = 140
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "5000"
+    source_address_prefix      = "10.0.3.0/24"  # subnet for web tier
+    destination_address_prefix = "10.0.2.0/24"  # subnet for app tier
+  }
+    security_rule {
+    name                       = "allow-8080"
+    priority                   = 145
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "8080"
+    source_address_prefix      = "10.0.3.0/24"  # subnet for web tier
+    destination_address_prefix = "10.0.2.0/24"  # subnet for app tier
+  }
+}
+resource "azurerm_subnet_network_security_group_association" "NSG-App-Tier-association" {
+  subnet_id                 = azurerm_subnet.subnet1-App-Tier.id
+  network_security_group_id = azurerm_network_security_group.NSG-App-Tier.id
+}
+resource "azurerm_network_security_group" "NSG-Database-Tier" {
+  name                = "NSG-Database-Tier"
+  location            = azurerm_resource_group.rg1.location
+  resource_group_name = azurerm_resource_group.rg1.name
+  security_rule {
+    name                       = "allow-5432"
+    priority                   = 160
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "5432"
+    source_address_prefix      = "10.0.2.0/24"  # subnet for app tier
+    destination_address_prefix = "10.0.4.0/24"  # subnet for database tier
+  }
+    security_rule {
+    name                       = "allow-3306"
+    priority                   = 165
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "3306"
+    source_address_prefix      = "10.0.2.0/24"  # subnet for app tier
+    destination_address_prefix = "10.0.4.0/24"  # subnet for database tier
+  }
+}
+
+resource "azurerm_subnet_network_security_group_association" "NSG-Database-Tier-association" {
+  subnet_id                 = azurerm_subnet.subnet3-DB-Tier.id
+  network_security_group_id = azurerm_network_security_group.NSG-Database-Tier.id
+}
+
+# ---------------app service tier association with subnet---------------
+resource "azurerm_app_service_virtual_network_swift_connection" "subnet1-App-Tier-asosciation-conn" {
+  app_service_id = azurerm_app_service.appservicename1.id
+  subnet_id      = azurerm_subnet.subnet2-web-tier.id
+}
+#----------------database service tier association with subnet---------------
+resource "azurerm_postgresql_virtual_network_rule" "database-subnet-association" {
+  name                                 = "postgresql-vnet-rule"
+  resource_group_name                  = azurerm_resource_group.rg1.name
+  server_name                          = azurerm_postgresql_server.sqlserver1.name
+  subnet_id                            = azurerm_subnet.subnet3-DB-Tier.id
+  ignore_missing_vnet_service_endpoint = true
+}
