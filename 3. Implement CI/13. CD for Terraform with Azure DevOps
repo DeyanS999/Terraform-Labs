@@ -1,0 +1,159 @@
+3. Implement CI/CD for Terraform with Azure DevOps
+	• Goal: Automate Terraform execution using Azure DevOps.
+	• Tasks:
+		○ Set up an Azure DevOps pipeline to run Terraform.
+		○ Automate terraform fmt, plan, and apply.
+		○ Store the state remotely in Azure Storage.
+	• Focus Areas: Automation, DevOps best practices.
+
+
+
+GUIDE:
+Step 1: Set Up Azure DevOps Project & Repository
+	1. Create an Azure DevOps project
+		○ Go to Azure DevOps and create a new project.
+		○ Inside the project, create a new Git repository to store your Terraform files.
+	2. Set up your local repository
+		○ Clone the repository to your local machine.
+		○ Create Terraform configuration files (.tf files) for your infrastructure.
+
+Step 2: Set Up Azure Storage for Remote State
+	1. Create an Azure Storage Account
+		○ This is needed to store the Terraform state file remotely.
+	2. Create a Storage Container
+		○ Inside the storage account, create a blob container specifically for Terraform state.
+	3. Note the necessary details
+		○ Storage account name
+		○ Container name
+		○ Access keys or SAS token (if needed)
+
+Step 3: Configure the Azure DevOps Pipeline
+	1. Navigate to Azure DevOps Pipelines
+		○ In your project, go to Pipelines > New Pipeline.
+		○ Choose your Git repository where the Terraform files are stored.
+	2. Define Pipeline Stages
+		○ The pipeline should automate the following Terraform steps:
+			§ terraform fmt (to format your code)
+			§ terraform init (to initialize Terraform and connect to remote state)
+			§ terraform plan (to preview infrastructure changes)
+			§ terraform apply (to apply changes automatically)
+
+Step 4: Configure Pipeline Variables & Authentication
+	1. Store Azure Credentials Securely
+		○ Use Azure DevOps Service Connections to authenticate Terraform with Azure.
+		○ Alternatively, store credentials as Pipeline Variables or Azure Key Vault Secrets.
+	2. Reference Variables in Pipeline
+		○ Ensure your pipeline can access the storage account details and authentication credentials needed for Terraform.
+
+Step 5: Run & Test the Pipeline
+	1. Commit and Push Terraform Code
+		○ Push your Terraform files to the repository.
+	2. Trigger the Pipeline
+		○ Manually trigger the pipeline in Azure DevOps or configure it to run on each commit.
+	3. Monitor Execution
+		○ Watch the pipeline logs to ensure Terraform executes correctly.
+		○ Fix any issues related to authentication, syntax, or Azure permissions.
+
+Step 6: Implement Best Practices
+	1. Enable Terraform Backend Locking
+		○ This prevents multiple people from running terraform apply at the same time.
+	2. Use Branch Policies
+		○ Require pull requests and approvals before running Terraform in production.
+	3. Use Terraform Modules
+		○ Organize your Terraform code into reusable modules.
+
+Next Steps
+Once you get this working, try extending it by:
+✅ Adding a Terraform destroy step for cleanup.
+✅ Using Terraform Workspaces for different environments.
+✅ Integrating Azure Key Vault to store sensitive credentials.
+
+
+# main.tf
+
+# Provider
+terraform {
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "4.16.0"
+    }
+  }
+}
+provider "azurerm" {
+    client_id             = ""
+    client_secret         = ""
+    tenant_id             = ""
+  # Configuration options
+  features {}
+  subscription_id = ""
+}
+
+
+
+# =====================================================
+#************************ VM1 *********************
+# =====================================================
+resource "azurerm_resource_group" "rg1" {
+  name     = "Rg-pipeline-test"
+  location = "East US"
+}
+
+
+
+
+# backend.tf
+
+terraform {
+  backend "azurerm" {
+    resource_group_name  = "test1"
+    storage_account_name = "storage123551"     # Your storage account name
+    container_name       = "terraform-state"   # Your container name
+    key                  = "terraform.tfstate" # The name of the state file
+
+    client_id             = ""
+    client_secret         = ""
+    subscription_id       = ""
+    tenant_id             = ""
+  }
+}
+
+
+# .gitignore
+
+.terraform/terraform.tfstate
+.terraform/
+.terraform.lock.hcl
+
+
+
+
+
+# YAML
+
+trigger:
+  branches:
+    include:
+      - master  # Trigger pipeline on push to the master branch
+pool:
+  vmImage: 'ubuntu-latest'  # Use a Linux-based VM for running Terraform
+steps:
+  - task: TerraformInstaller@1
+    inputs:
+      terraformVersion: 'latest'  # Automatically installs the latest version of Terraform
+  - script: terraform fmt -check -diff
+    displayName: 'Run terraform fmt'
+  - task: AzureCLI@2  # Use the correct Azure CLI task
+    inputs:
+      azureSubscription: 'TEST-LAB-2'  # Replace with your Azure DevOps Service Connection name
+      scriptType: 'bash'
+      scriptLocation: 'inlineScript'
+      inlineScript: |
+        echo "Azure CLI is set up correctly."
+        # Add any additional Azure CLI commands you need here
+  - script: terraform init
+    displayName: 'Terraform Init'
+  - script: terraform plan -out=tfplan
+    displayName: 'Terraform Plan'
+  - script: terraform apply -auto-approve tfplan
+    displayName: 'Terraform Apply'
