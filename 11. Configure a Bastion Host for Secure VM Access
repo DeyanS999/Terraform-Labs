@@ -1,0 +1,302 @@
+5. Configure a Bastion Host for Secure VM Access
+	• Goal: Secure SSH/RDP access to internal VMs.
+	• Tasks:
+		○ Deploy an Azure Bastion Host.
+		○ Restrict access using NSGs.
+		○ Allow only specific IPs to connect.
+	• Focus Areas: Security, access control, networking.
+
+How to deploy Azure Bastion via Terraform - DEV Community
+https://dev.to/holger/test-azure-bastion-deployment-via-terraform-18o8
+
+
+#================= Provider ===================
+terraform {
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "4.16.0"
+    }
+  }
+}
+provider "azurerm" {
+  # Configuration options
+  features {}
+  subscription_id = "c23a3174-f9e7-4414-9f75-966ddbb786fb"
+}
+
+
+# =============== variables ===============
+
+  variable "admin_username" {
+    default = "admind"
+  }
+
+  variable "admin_password" {
+    default = "Vanguard1234"
+  }
+
+# ============================================
+
+resource "azurerm_resource_group" "rg1" {
+  location = "eastus"
+  name     = "bastion-test-rg"
+}
+
+
+
+# ================= VNET ======================
+
+
+# Create virtual network
+resource "azurerm_virtual_network" "vnet1" {
+  name                = "test-vnet"
+  address_space       = ["10.40.2.0/24"]
+  location            = azurerm_resource_group.rg1.location
+  resource_group_name = azurerm_resource_group.rg1.name
+}
+
+# Create subnets
+resource "azurerm_subnet" "bastion_subnet" {
+  name                 = "AzureBastionSubnet"
+  resource_group_name  = azurerm_resource_group.rg1.name
+  virtual_network_name = azurerm_virtual_network.vnet1.name
+  address_prefixes     = ["10.40.2.0/25"]
+}
+
+resource "azurerm_subnet" "vm_subnet" {
+  name                 = "vm-subnet"
+  resource_group_name  = azurerm_resource_group.rg1.name
+  virtual_network_name = azurerm_virtual_network.vnet1.name
+  address_prefixes     = ["10.40.2.128/25"]
+}
+
+
+# ==================================================================================================
+# Create Network Security Group for VM Subnet and the corresponding rule for RDP from Azure Bastion
+
+resource "azurerm_network_security_group" "vm_subnet_nsg" {
+  name                = "nsg-vm-subnet"
+  location            = azurerm_resource_group.rg1.location
+  resource_group_name = azurerm_resource_group.rg1.name
+}
+
+
+resource "azurerm_network_security_rule" "inbound_allow_rdp" {
+  network_security_group_name = azurerm_network_security_group.vm_subnet_nsg.name
+  resource_group_name         = azurerm_resource_group.rg1.name
+  name                        = "Inbound_Allow_Bastion_RDP"
+  priority                    = 500
+  direction                   = "Inbound"
+  access                      = "Allow"
+  protocol                    = "Tcp"
+  source_port_range           = "*"
+  destination_port_range      = "3389"
+  source_address_prefix       = azurerm_subnet.bastion_subnet.address_prefixes[0]
+  destination_address_prefix  = azurerm_subnet.vm_subnet.address_prefixes[0]
+}
+
+resource "azurerm_network_security_rule" "inbound_allow_ssh" {
+  network_security_group_name = azurerm_network_security_group.vm_subnet_nsg.name
+  resource_group_name         = azurerm_resource_group.rg1.name
+  name                        = "Inbound_Allow_Bastion_SSH"
+  priority                    = 510
+  direction                   = "Inbound"
+  access                      = "Allow"
+  protocol                    = "Tcp"
+  source_port_range           = "*"
+  destination_port_range      = "22"
+  source_address_prefix       = azurerm_subnet.bastion_subnet.address_prefixes[0]
+  destination_address_prefix  = azurerm_subnet.vm_subnet.address_prefixes[0]
+}
+
+resource "azurerm_network_security_rule" "inbound_deny_all" {
+  network_security_group_name = azurerm_network_security_group.vm_subnet_nsg.name
+  resource_group_name         = azurerm_resource_group.rg1.name
+  name                        = "Inbound_Deny_Any_Any"
+  priority                    = 1000
+  direction                   = "Inbound"
+  access                      = "Deny"
+  protocol                    = "*"
+  source_port_range           = "*"
+  destination_port_range      = "*"
+  source_address_prefix       = "*"
+  destination_address_prefix  = azurerm_subnet.vm_subnet.address_prefixes[0]
+}
+
+resource "azurerm_network_security_rule" "outbound_allow_subnet" {
+  network_security_group_name = azurerm_network_security_group.vm_subnet_nsg.name
+  resource_group_name         = azurerm_resource_group.rg1.name
+  name                        = "Outbound_Allow_Subnet_Any"
+  priority                    = 500
+  direction                   = "Outbound"
+  access                      = "Allow"
+  protocol                    = "*"
+  source_port_range           = "*"
+  destination_port_range      = "*"
+  source_address_prefix       = azurerm_subnet.vm_subnet.address_prefixes[0]
+  destination_address_prefix  = azurerm_subnet.vm_subnet.address_prefixes[0]
+}
+
+resource "azurerm_network_security_rule" "outbound_deny_all" {
+  network_security_group_name = azurerm_network_security_group.vm_subnet_nsg.name
+  resource_group_name         = azurerm_resource_group.rg1.name
+  name                        = "Outbound_Deny_Any_Any"
+  priority                    = 1000
+  direction                   = "Outbound"
+  access                      = "Deny"
+  protocol                    = "*"
+  source_port_range           = "*"
+  destination_port_range      = "*"
+  source_address_prefix       = azurerm_subnet.vm_subnet.address_prefixes[0]
+  destination_address_prefix  = "*"
+}
+
+resource "azurerm_subnet_network_security_group_association" "nsg_vm_subnet_association" {
+  network_security_group_id = azurerm_network_security_group.vm_subnet_nsg.id
+  subnet_id                 = azurerm_subnet.vm_subnet.id
+}
+
+# ============= Linux VM ====================
+
+# Create an SSH key
+resource "tls_private_key" "ubn_ssh" {
+  algorithm = "RSA"
+  rsa_bits  = 4096
+}
+
+
+# Save the private key to a local file
+resource "local_file" "private_key_file" {
+  content  = tls_private_key.ubn_ssh.private_key_pem
+  filename = "C:\\TERRAFORM LABS\\Practice labs 2\\5\\my_private_key.pem"
+}
+
+# Optional: Output the private key if needed (sensitive)
+output "private_key" {
+  value     = tls_private_key.ubn_ssh.private_key_pem
+  sensitive = true
+}
+
+# ==============================================================
+# Create network interface for the Linux VM
+resource "azurerm_network_interface" "nic_ubn_01" {
+  name                = "nic_ubn-01"
+  location            = azurerm_resource_group.rg1.location
+  resource_group_name = azurerm_resource_group.rg1.name
+
+  ip_configuration {
+    name                          = "nic_ubn-01-configuration"
+    subnet_id                     = azurerm_subnet.vm_subnet.id
+    private_ip_address_allocation = "Dynamic"
+  }
+}
+
+# Create virtual machine
+resource "azurerm_linux_virtual_machine" "vm_ubn_01" {
+  name                  = "vm-ubn-01"
+  location              = azurerm_resource_group.rg1.location
+  resource_group_name   = azurerm_resource_group.rg1.name
+  network_interface_ids = [azurerm_network_interface.nic_ubn_01.id]
+  size                  = "Standard_B1s"
+
+  os_disk {
+    name                 = "disk-os-ubn-01"
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "UbuntuServer"
+    sku       = "18.04-LTS"
+    version   = "latest"
+  }
+
+  computer_name                   = "vm-ubn-01"
+  admin_username                  = "ubn-azureuser"
+  disable_password_authentication = true
+
+  admin_ssh_key {
+    username   = "ubn-azureuser"
+    public_key = tls_private_key.ubn_ssh.public_key_openssh
+  }
+}
+
+
+# ================= Windows VM =========================
+
+
+# Create network interface
+resource "azurerm_network_interface" "nic_win_01" {
+  name                = "nic_win-01"
+  location            = azurerm_resource_group.rg1.location
+  resource_group_name = azurerm_resource_group.rg1.name
+
+  ip_configuration {
+    name                          = "nic_win-01-configuration"
+    subnet_id                     = azurerm_subnet.vm_subnet.id
+    private_ip_address_allocation = "Dynamic"
+  }
+}
+
+resource "azurerm_windows_virtual_machine" "vm-win-01" {
+  name                = "vm-win-01"
+  resource_group_name = azurerm_resource_group.rg1.name
+  location            = azurerm_resource_group.rg1.location
+  size                = "Standard_DS2_v2"
+  admin_username      = var.admin_username
+  admin_password      = var.admin_password
+  network_interface_ids = [
+    azurerm_network_interface.nic_win_01.id
+  ]
+
+  os_disk {
+    name                 = "disk-os-win-01"
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+
+  source_image_reference {
+    publisher = "MicrosoftWindowsServer"
+    offer     = "WindowsServer"
+    sku       = "2022-Datacenter"
+    version   = "latest"
+  }
+}
+
+
+# ======================= Azure Bastion ====================
+
+
+
+resource "azurerm_public_ip" "bastion_pip" {
+  name                = "pip-bastion"
+  location            = azurerm_resource_group.rg1.location
+  resource_group_name = azurerm_resource_group.rg1.name
+  allocation_method   = "Static"
+  sku                 = "Standard"
+}
+
+resource "azurerm_bastion_host" "bastion_host" {
+  name                = "bastion-host"
+  location            = azurerm_resource_group.rg1.location
+  resource_group_name = azurerm_resource_group.rg1.name
+  sku                 = "Standard"
+  scale_units         = 2
+
+  copy_paste_enabled     = true
+  file_copy_enabled      = true
+  shareable_link_enabled = true
+  tunneling_enabled      = true
+
+  ip_configuration {
+    name                 = "config-01"
+    subnet_id            = azurerm_subnet.bastion_subnet.id
+    public_ip_address_id = azurerm_public_ip.bastion_pip.id
+  }
+}
+
+
+
+
