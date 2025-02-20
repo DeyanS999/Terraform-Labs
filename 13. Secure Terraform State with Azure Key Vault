@@ -1,0 +1,202 @@
+7. Secure Terraform State with Azure Key Vault
+	• Goal: Store Terraform state securely.
+	• Tasks:
+		○ Store Terraform state in Azure Storage.
+		○ Enable encryption with Azure Key Vault.
+		○ Configure role-based access (RBAC) for security.
+	• Focus Areas: Security, state management.
+
+
+
+1. Store Terraform state in Azure Storage
+	• Purpose: Terraform state is critical as it tracks the infrastructure. You want it stored securely and reliably.
+	• Steps:
+		○ You need to define an Azure Storage Account and a container to hold the state files.
+		○ Use the Terraform backend configuration to point to Azure Storage.
+		○ Key Concepts: Storage Account, Storage Container, Access Keys.
+
+2. Enable encryption with Azure Key Vault
+	• Purpose: By default, Azure encrypts data at rest, but you can add another layer of encryption using a customer-managed key (CMK) from Azure Key Vault.
+	• Steps:
+		○ Create a Key Vault and a key (or ensure one exists).
+		○ Enable the storage account to use the customer-managed key from Key Vault.
+		○ You may need to configure access policies to allow the storage account to use the key for encryption.
+		○ Key Concepts: Customer-managed keys (CMK), Key Vault access policies, Encryption scopes.
+
+
+
+main.tf 
+
+
+#================= Provider ===================
+terraform {
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "4.16.0"
+    }
+  }
+}
+provider "azurerm" {
+  # Configuration options
+  features {}
+  subscription_id = ""
+}
+
+
+# =================== Backend config ===========
+
+ terraform {
+  backend "azurerm" {
+   resource_group_name  = "rg1"
+   storage_account_name = "esto5767867d"
+    container_name       = "b-ter-state-cont"
+    key                  = "terraform.tfstate"
+  }
+}
+
+
+#==================== Resources ===============
+resource "azurerm_resource_group" "rg1" {
+  name     = "rg1"
+  location = "West Europe"
+}
+
+resource "azurerm_storage_account" "storage1" {
+  name                     = "esto5767867d"
+  resource_group_name      = azurerm_resource_group.rg1.name
+  location                 = azurerm_resource_group.rg1.location
+  account_tier             = "Standard"
+  account_replication_type = "LRS"
+
+}
+
+resource "azurerm_storage_container" "container1" {
+  name                  = "b-ter-state-cont"
+  storage_account_id    = azurerm_storage_account.storage1.id
+  container_access_type = "private"
+}
+
+#======================== key vault =======================
+
+data "azurerm_client_config" "current" {}
+
+resource "azurerm_key_vault" "kv-test" {
+  name                        = "kv-test-1-nefes"
+  location                    = azurerm_resource_group.rg1.location
+  resource_group_name         = azurerm_resource_group.rg1.name
+  enabled_for_disk_encryption = true
+  tenant_id                   = data.azurerm_client_config.current.tenant_id
+  soft_delete_retention_days  = 7
+  purge_protection_enabled    = false
+
+  sku_name = "standard"
+
+  access_policy {
+    tenant_id = data.azurerm_client_config.current.tenant_id
+    object_id = data.azurerm_client_config.current.object_id
+
+    key_permissions = var.key_permissions
+
+    secret_permissions = var.secret_permissions
+
+    storage_permissions = [
+      "Get",
+    ]
+  }
+}
+
+
+#=========================== azure key vault key ====================
+
+resource "random_string" "azurerm_key_vault_key_name" {
+  length  = 13
+  lower   = true
+  numeric = false
+  special = false
+  upper   = false
+}
+
+resource "azurerm_key_vault_key" "key" {
+  name = coalesce(var.key_name, "keyforreal-${random_string.azurerm_key_vault_key_name.result}")
+
+  key_vault_id = azurerm_key_vault.kv-test.id
+  key_type     = var.key_type
+  key_size     = var.key_size
+  key_opts     = var.key_ops
+
+  rotation_policy {
+    automatic {
+      time_before_expiry = "P30D"
+    }
+
+    expire_after         = "P90D"
+    notify_before_expiry = "P29D"
+  }
+}
+
+
+
+# variables.tf
+
+
+variable "key_name" {
+  type        = string
+  description = "The name of the key to be created. The value will be randomly generated if blank."
+  default     = ""
+}
+
+variable "key_permissions" {
+  type        = list(string)
+  description = "List of key permissions."
+  default     = ["List", "Create", "Delete", "Get", "Purge", "Recover", "Update", "GetRotationPolicy", "SetRotationPolicy"]
+}
+
+variable "secret_permissions" {
+  type        = list(string)
+  description = "List of secret permissions."
+  default     = ["Set"]
+}
+
+variable "key_type" {
+  description = "The JsonWebKeyType of the key to be created."
+  default     = "RSA"
+  type        = string
+  validation {
+    condition     = contains(["EC", "EC-HSM", "RSA", "RSA-HSM"], var.key_type)
+    error_message = "The key_type must be one of the following: EC, EC-HSM, RSA, RSA-HSM."
+  }
+}
+
+variable "key_ops" {
+  type        = list(string)
+  description = "The permitted JSON web key operations of the key to be created."
+  default     = ["decrypt", "encrypt", "sign", "unwrapKey", "verify", "wrapKey"]
+}
+
+variable "key_size" {
+  type        = number
+  description = "The size in bits of the key to be created."
+  default     = 2048
+}
+
+variable "msi_id" {
+  type        = string
+  description = "The Managed Service Identity ID. If this value isn't null (the default), 'data.azurerm_client_config.current.object_id' will be set to this value."
+  default     = null
+}
+
+
+# output.tf
+
+output "resource_group_name" {
+  value = azurerm_resource_group.rg1.name
+}
+
+output "azurerm_key_vault_name" {
+  value = azurerm_key_vault.kv-test.name
+}
+
+output "azurerm_key_vault_id" {
+  value = azurerm_key_vault.kv-test.id
+}
