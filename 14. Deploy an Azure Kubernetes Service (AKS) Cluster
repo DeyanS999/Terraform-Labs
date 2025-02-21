@@ -1,0 +1,142 @@
+8. Deploy an Azure Kubernetes Service (AKS) Cluster
+	• Goal: Use Terraform to deploy a Kubernetes cluster.
+	• Tasks:
+		○ Deploy an AKS cluster with multiple node pools.
+		○ Attach an Azure Load Balancer for ingress.
+		○ Deploy a sample containerized app.
+	• Focus Areas: Kubernetes, infrastructure automation.
+
+
+
+#================= Provider ===================
+terraform {
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "4.20.0"
+    }
+  }
+}
+provider "azurerm" {
+  # Configuration options
+  features {}
+  subscription_id = "c23a3174-f9e7-4414-9f75-966ddbb786fb"
+}
+#==================== aks deployment =====================
+resource "azurerm_resource_group" "rg1" {
+  name     = "rg1-aks-test"
+  location = "East US"
+}
+resource "azurerm_kubernetes_cluster" "aks1" {
+  name                = "AKS1-TEST"
+  location            = azurerm_resource_group.rg1.location
+  resource_group_name = azurerm_resource_group.rg1.name
+  dns_prefix          = "exampleaks1"
+  default_node_pool {
+    name       = "default"
+    node_count = 2
+    vm_size    = "Standard_D2_v2"
+  }
+  network_profile {
+    network_plugin     = "azure"
+#    service_cidr       = "172.100.0.0/24"
+#    dns_service_ip     = "172.100.0.10"
+    load_balancer_sku  = "standard"
+  }
+  identity {
+    type = "SystemAssigned"
+  }
+  tags = {
+    Environment = "Production"
+  }
+}
+output "client_certificate" {
+  value     = azurerm_kubernetes_cluster.aks1.kube_config[0].client_certificate
+  sensitive = true
+}
+output "kube_config" {
+  value = azurerm_kubernetes_cluster.aks1.kube_config_raw
+  sensitive = true
+}
+# ============== AKS pools =================
+resource "azurerm_kubernetes_cluster_node_pool" "pool1" {
+  name                  = "akspool1"
+  kubernetes_cluster_id = azurerm_kubernetes_cluster.aks1.id
+  vm_size               = "Standard_DS2_v2"
+  node_count            = 1
+  tags = {
+    Environment = "Production"
+  }
+}
+
+resource "azurerm_kubernetes_cluster_node_pool" "pool2" {
+  name                  = "akspool2"
+  kubernetes_cluster_id = azurerm_kubernetes_cluster.aks1.id
+  vm_size               = "Standard_DS2_v2"
+  node_count            = 1
+  tags = {
+    Environment = "Production"
+  }
+}
+
+
+
+Create two files on your PC.
+
+# nginx-deployment.yaml
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+
+
+#  nginx-service.yaml
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service
+spec:
+  selector:
+    app: nginx
+  type: LoadBalancer
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+
+
+Before applying the files, verify that your kubectl is configured to use the correct AKS cluster. Run:
+az aks get-credentials --resource-group <your-resource-group> --name <your-aks-cluster>
+
+Then, check if the connection is working:
+kubectl get nodes
+
+2. Apply the YAML Files to AKS
+Navigate to the folder where you saved the YAML files and run:
+kubectl apply -f nginx-deployment.yaml
+kubectl apply -f nginx-service.yaml
+
+3. Verify the Deployment
+kubectl get pods
+
+Check if the LoadBalancer service is assigned an External IP:
+kubectl get svc nginx-service
+
+then open the public ip in browser, you should see the Nginx website
