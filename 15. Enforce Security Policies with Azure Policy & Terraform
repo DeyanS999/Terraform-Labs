@@ -1,0 +1,125 @@
+15. Enforce Security Policies with Azure Policy & Terraform
+	• Goal: Enforce compliance using Azure Policy.
+	• Tasks:
+		○ Define a policy that restricts certain VM sizes.
+		○ Enforce tagging rules for all resources.
+		○ Apply the policy using Terraform.
+	• Focus Areas: Compliance, security governance.
+	
+	
+	
+	
+	#================= Provider ===================
+	terraform {
+	  required_providers {
+	    azurerm = {
+	      source  = "hashicorp/azurerm"
+	      version = "4.20.0"
+	    }
+	  }
+	}
+	provider "azurerm" {
+	  # Configuration options
+	  features {}
+	  subscription_id = "c23a3174-f9e7-4414-9f75-966ddbb786fb"
+	}
+	
+	#============================================================
+	data "azurerm_subscription" "current" {}
+	resource "azurerm_policy_definition" "policy_definition_1_test" {
+	  name         = "only-deploy-in-eastus"
+	  policy_type  = "Custom"
+	  mode         = "All"
+	  display_name = "Allowed resource types"
+	  policy_rule = <<POLICY_RULE
+	 {
+	    "if": {
+	      "not": {
+	        "field": "location",
+	        "equals": "eastus"
+	      }
+	    },
+	    "then": {
+	      "effect": "Deny"
+	    }
+	  }
+	POLICY_RULE
+	}
+	resource "azurerm_subscription_policy_assignment" "policy_assignment_1_test" {
+	  name                 = "policy_assignment_1_region"
+	  policy_definition_id = azurerm_policy_definition.policy_definition_1_test.id
+	  subscription_id      = data.azurerm_subscription.current.id
+	}
+	#==================== Policy 2 - VM size =======================
+	resource "azurerm_policy_definition" "policy_definition_2_test" {
+	  name         = "only-deploy-Standard_B1s_size"
+	  policy_type  = "Custom"
+	  mode         = "All"
+	  display_name = "Allowed VM size"
+	  policy_rule = <<POLICY_RULE
+	 {
+	    "if": {
+	      "not": {
+	        "field": "Microsoft.Compute/virtualMachines/sku.name",
+	        "equals": "Standard_B1s"
+	      }
+	    },
+	    "then": {
+	      "effect": "Deny"
+	    }
+	  }
+	POLICY_RULE
+	}
+	resource "azurerm_subscription_policy_assignment" "policy_assignment_2_test" {
+	  name                 = "policy_assignment_2_vm_size"
+	  policy_definition_id = azurerm_policy_definition.policy_definition_2_test.id
+	  subscription_id      = data.azurerm_subscription.current.id
+	}
+	#==================== Policy 3 - TAG enforcement =======================
+	resource "azurerm_policy_definition" "policy_definition_3_test" {
+	  name         = "resource_TAG_enforcement"
+	  policy_type  = "Custom"
+	  mode         = "All"
+	  display_name = "TAG_enforcement_for_resource"
+	  parameters = <<PARAMETERS
+	{
+	  "tagName": {
+	    "type": "String",
+	    "metadata": {
+	      "displayName": "Tag Name",
+	      "description": "Name of the tag, such as 'environment'"
+	    }
+	  },
+	  "tagValue": {
+	    "type": "String",
+	    "metadata": {
+	      "displayName": "Tag Value",
+	      "description": "Value of the tag, such as 'production'"
+	    }
+	  }
+	}
+	PARAMETERS
+	  policy_rule = <<POLICY_RULE
+	{
+	  "if": {
+	    "not": {
+	      "field": "[concat('tags[', parameters('tagName'), ']')]",
+	      "equals": "[parameters('tagValue')]"
+	    }
+	  },
+	  "then": {
+	    "effect": "Deny"
+	  }
+	}
+	POLICY_RULE
+	}
+	
+	resource "azurerm_subscription_policy_assignment" "policy_assignment_3_test" {
+	  name                 = "resource_assignment_TAG_enforcement"
+	  policy_definition_id = azurerm_policy_definition.policy_definition_3_test.id
+	  subscription_id      = data.azurerm_subscription.current.id
+	  parameters = jsonencode({
+	    tagName  = { value = "environment" }
+	    tagValue = { value = "production" }
+	  })
+	}
