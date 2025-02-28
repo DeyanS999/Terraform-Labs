@@ -1,0 +1,195 @@
+2. Deploy Azure Application Gateway with Terraform
+	• Goal: Set up an Azure Application Gateway for HTTP/HTTPS traffic.
+	• Tasks:
+		○ Deploy the Application Gateway.
+		○ Configure URL-based routing.
+		○ Add backend VMs with a health probe.
+		○ Enable WAF (Web Application Firewall). didnt deploy this
+	• Focus Areas: Load Balancing, Security, HTTPS traffic.
+
+
+
+
+#================= Provider ===================
+terraform {
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = ">= 2.0.0"
+    }
+  }
+}
+provider "azurerm" {
+  # Configuration options
+  features {}
+  subscription_id = "c23a3174-f9e7-4414-9f75-966ddbb786fb"
+}
+
+
+
+
+
+resource "random_string" "random_string_1" {
+  length  = 5
+  lower   = true
+  numeric = false
+  special = false
+  upper   = false
+}
+# Resource Group
+resource "azurerm_resource_group" "test1" {
+  name     = "rg-compute-test"
+  location = "East US"
+}
+
+
+# NIC
+resource "azurerm_network_interface" "NIC1" {
+  count               = 2
+  name                = "nic-${random_string.random_string_1.result}-${count.index}"
+  location            = azurerm_resource_group.test1.location
+  resource_group_name = azurerm_resource_group.test1.name
+  ip_configuration {
+    name                          = "internal-${random_string.random_string_1.result}-${count.index}"
+    subnet_id                     = azurerm_subnet.subnet1.id
+    private_ip_address_allocation = "Dynamic"
+  }
+}
+# NIC association
+resource "azurerm_network_interface_security_group_association" "NSG-NIC1" {
+  count                     = 2
+  network_interface_id      = azurerm_network_interface.NIC1[count.index].id
+  network_security_group_id = azurerm_network_security_group.NSG1.id
+}
+# Virtual Machine
+resource "azurerm_windows_virtual_machine" "vmtest" {
+  count               = 2
+  name                = "vmtest-${random_string.random_string_1.result}-${count.index}"
+  resource_group_name = azurerm_resource_group.test1.name
+  location            = azurerm_resource_group.test1.location
+  size                = "Standard_B1s"
+  admin_username      = "admind"
+  admin_password      = "Vanguard1234"
+  network_interface_ids = [
+    azurerm_network_interface.NIC1[count.index].id,
+  ]
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+  source_image_reference {
+    publisher = "MicrosoftWindowsServer"
+    offer     = "WindowsServer"
+    sku       = "2022-datacenter-g2"
+    version   = "latest"
+  }
+}
+resource "azurerm_network_security_group" "NSG1" {
+  name                = "acceptanceTestSecurityGroup1-${random_string.random_string_1.result}"
+  location            = azurerm_resource_group.test1.location
+  resource_group_name = azurerm_resource_group.test1.name
+}
+# Security Rule Allowing RDP (3389)
+resource "azurerm_network_security_rule" "rdp-test" {
+  name                        = "test-${random_string.random_string_1.result}"
+  priority                    = 1001
+  direction                   = "Inbound"
+  access                      = "Allow"
+  protocol                    = "Tcp"
+  source_port_range           = "*"
+  destination_port_range      = "3389"
+  source_address_prefix       = "*"
+  destination_address_prefix  = "*"
+  resource_group_name         = azurerm_resource_group.test1.name
+  network_security_group_name = azurerm_network_security_group.NSG1.name
+}
+
+
+
+resource "azurerm_public_ip" "agggw-pubip" {
+  name                = "appgw-test-pip"
+  resource_group_name = azurerm_resource_group.test1.name
+  location            = azurerm_resource_group.test1.location
+  allocation_method   = "Static"
+}
+# since these variables are re-used - a locals block makes this more maintainable
+locals {
+  backend_address_pool_name      = "${azurerm_virtual_network.testvm1.name}-beap"
+  frontend_port_name             = "${azurerm_virtual_network.testvm1.name}-feport"
+  frontend_ip_configuration_name = "${azurerm_virtual_network.testvm1.name}-feip"
+  http_setting_name              = "${azurerm_virtual_network.testvm1.name}-be-htst"
+  listener_name                  = "${azurerm_virtual_network.testvm1.name}-httplstn"
+  request_routing_rule_name      = "${azurerm_virtual_network.testvm1.name}-rqrt"
+  redirect_configuration_name    = "${azurerm_virtual_network.testvm1.name}-rdrcfg"
+}
+resource "azurerm_application_gateway" "appgw-test" {
+  name                = "appgateway-test"
+  resource_group_name = azurerm_resource_group.test1.name
+  location            = azurerm_resource_group.test1.location
+  sku {
+    name     = "Standard_v2"
+    tier     = "Standard_v2"
+    capacity = 2
+  }
+  gateway_ip_configuration {
+    name      = "mapp-gateway-ip-config"
+    subnet_id = azurerm_subnet.subnet2.id
+  }
+  frontend_port {
+    name = local.frontend_port_name
+    port = 80
+  }
+  frontend_ip_configuration {
+    name                 = local.frontend_ip_configuration_name
+    public_ip_address_id = azurerm_public_ip.agggw-pubip.id
+  }
+  backend_address_pool {
+    name = local.backend_address_pool_name
+  }
+  backend_http_settings {
+    name                  = local.http_setting_name
+    cookie_based_affinity = "Disabled"
+    path                  = "/path1/"
+    port                  = 80
+    protocol              = "Http"
+    request_timeout       = 60
+  }
+  http_listener {
+    name                           = local.listener_name
+    frontend_ip_configuration_name = local.frontend_ip_configuration_name
+    frontend_port_name             = local.frontend_port_name
+    protocol                       = "Http"
+  }
+  request_routing_rule {
+    name                       = local.request_routing_rule_name
+    priority                   = 9
+    rule_type                  = "Basic"
+    http_listener_name         = local.listener_name
+    backend_address_pool_name  = local.backend_address_pool_name
+    backend_http_settings_name = local.http_setting_name
+  }
+}
+
+
+
+# Vritual Network -used for the AppGW and the 2 VMs
+resource "azurerm_virtual_network" "testvm1" {
+  name                = "Vnet-${random_string.random_string_1.result}"
+  address_space       = ["10.0.0.0/16"]
+  location            = azurerm_resource_group.test1.location
+  resource_group_name = azurerm_resource_group.test1.name
+}
+# Subnet - Used for the 2 VMs
+resource "azurerm_subnet" "subnet1" {
+  name                 = "subnet-VM${random_string.random_string_1.result}"
+  resource_group_name  = azurerm_resource_group.test1.name
+  virtual_network_name = azurerm_virtual_network.testvm1.name
+  address_prefixes     = ["10.0.2.0/24"]
+}
+# # Subnet - Used for the AppGW
+resource "azurerm_subnet" "subnet2" {
+  name                 = "subnet-appgw${random_string.random_string_1.result}"
+  resource_group_name  = azurerm_resource_group.test1.name
+  virtual_network_name = azurerm_virtual_network.testvm1.name
+  address_prefixes     = ["10.0.3.0/24"]
+}
