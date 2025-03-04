@@ -1,0 +1,64 @@
+3. Deploy Azure SQL Database with Firewall Rules
+	• Goal: Automate Azure SQL Database deployment.
+	• Tasks:
+		○ Provision an Azure SQL Database with Terraform.
+		○ Configure firewall rules to allow only specific IP addresses.
+		○ Enable Transparent Data Encryption (TDE).
+	• Focus Areas: Database provisioning, Security.
+
+
+#================= Provider ===================
+terraform {
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "> 2.0.0"
+    }
+  }
+}
+provider "azurerm" {
+  # Configuration options
+  features {}
+  subscription_id = ""
+}
+
+
+resource "azurerm_resource_group" "rg1-sql" {
+  name     = "rg1-sql"
+  location = "eastus2"
+}
+
+
+
+
+resource "azurerm_mssql_server" "sql-server" {
+  name                         = "sql-serve-test"
+  resource_group_name          = azurerm_resource_group.rg1-sql.name
+  location                     = azurerm_resource_group.rg1-sql.location
+  version                      = "12.0"
+  administrator_login          = "4dm1n157r470r"
+  administrator_login_password = "4-v3ry-53cr37-p455w0rd"
+}
+
+resource "azurerm_mssql_database" "sql-db" {
+  name         = "sql-db-test"
+  server_id    = azurerm_mssql_server.sql-server.id
+  collation    = "SQL_Latin1_General_CP1_CI_AS"
+  license_type = "LicenseIncluded"
+  max_size_gb  = 2
+  sku_name     = "S0"
+  enclave_type = "VBS"
+
+  tags = {
+    foo = "bar"
+  }
+
+}
+
+
+resource "azurerm_mssql_firewall_rule" "example" {
+  name             = "FirewallRule1"
+  server_id        = azurerm_mssql_server.example.id
+  start_ip_address = "10.0.17.62"
+  end_ip_address   = "10.0.17.62"
+}
